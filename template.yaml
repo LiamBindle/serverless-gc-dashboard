@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+
+Resources:
+  DashboardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: geoschem_testing.dashboard
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - x86_64
+      Policies:
+        - AmazonDynamoDBReadOnlyAccess 
+        - arn:aws:iam::445683239525:policy/DynamoDB-FullAccess-Policy-Harvard
+      Events:
+        Dashboard:
+          Type: Api
+          Properties:
+            Path: /dashboard
+            Method: get
+  SimulationLookupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: geoschem_testing.simulation
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - x86_64
+      Policies:
+        - AmazonDynamoDBReadOnlyAccess 
+        - arn:aws:iam::445683239525:policy/DynamoDB-FullAccess-Policy-Harvard
+      Events:
+        SimulationLookup:
+          Type: Api
+          Properties:
+            Path: /dashboard/simulation
+            Method: get
+            RequestParameters:
+              - method.request.querystring.primary_key:
+                  Required: true
+                  Caching: false
+  DifferenceLookupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: geoschem_testing.difference
+      Runtime: python3.9
+      Timeout: 30
+      Architectures:
+        - x86_64
+      Policies:
+        - AmazonDynamoDBReadOnlyAccess
+        - arn:aws:iam::445683239525:policy/DynamoDB-FullAccess-Policy-Harvard
+      Events:
+        DifferenceLookup:
+          Type: Api
+          Properties:
+            Path: /dashboard/difference
+            Method: get
+            RequestParameters:
+              - method.request.querystring.primary_key:
+                  Required: true
+                  Caching: false
+
+Outputs:
+  DashboardURL:
+    Description: "The URL for the dashboard"
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/dashboard/"
