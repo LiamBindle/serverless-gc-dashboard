@@ -64,6 +64,34 @@ Resources:
               - method.request.querystring.primary_key:
                   Required: true
                   Caching: false
+#  BasicAPIFunction:
+#    Type: AWS::Serverless::Function
+#    Properties:
+#      CodeUri: src/
+#      Handler: geoschem_testing.api
+#      Runtime: python3.9
+#      Timeout: 30
+#      Architectures:
+#        - x86_64
+#      Policies:
+#        - AmazonDynamoDBReadOnlyAccess
+#        - arn:aws:iam::445683239525:policy/DynamoDB-FullAccess-Policy-Harvard
+#      Events:
+#        PostEvent:
+#          Type: Api
+#          Properties:
+#            Path: /api
+#            Method: post
+#        GetEvent:
+#          Type: Api
+#          Properties:
+#            Path: /api
+#            Method: get
+#        DeleteEvent:
+#          Type: Api
+#          Properties:
+#            Path: /api
+#            Method: delete
 
 Outputs:
   DashboardURL:

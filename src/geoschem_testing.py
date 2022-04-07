@@ -4,19 +4,53 @@ import itertools
 import typing
 import boto3
 import jinja2
+import json
+from datetime import date
 
 # This file could be split into seperate model.py, view.py, and controller.py modules.
 
-#== MODEL ==
+#== helpers ==
 
-def dynamodb_get_string(key, data):
-    return data.get(key, {}).get("S", None)
-def dynamodb_get_list_of_strings(key, data):
-    return [item.get("S", None) for item in data.get(key, {}).get("L", [])]
-def dynamodb_get_map(key, data):
-    return data.get(key, {}).get("M", None)
-def dynamodb_get_bool(key, data):
-    return data.get(key, {}).get("BOOL", None)
+def dynamodb_encode_item(v):
+    if isinstance(v, str):
+        return {"S": v}
+    elif isinstance(v, bool):
+        return {"BOOL": v}
+    elif isinstance(v, list):
+        return {"L": [dynamodb_encode_item(e) for e in v]}
+    elif isinstance(v, dict):
+        return {"M": { kk: dynamodb_encode_item(vv) for kk, vv in v.items()}}
+    else:
+        raise TypeError(f"Invalid type for encoding: {type(v).__name__}")
+
+def dynamodb_encode_dict(d: dict):
+    new_dict = {}
+    for k, v in d.items():
+        new_dict[k] = dynamodb_encode_item(v)
+    return new_dict
+
+
+def dynamodb_decode_item(d: dict):
+    if not isinstance(d, dict):
+        raise TypeError(f"Value of DynamoDB dict is not a nested dict.")
+    if len(d) != 1:
+        raise ValueError(f"Number of key-value pairs in DynamoDB dict is not one.")
+    item = list(d.values())[0]
+    if isinstance(item, list):
+        item = [dynamodb_decode_item(e) for e in item]
+    elif isinstance(item, dict):
+        item = {k: dynamodb_decode_item(v) for k, v in item.items()}
+    return item
+
+
+def dynamodb_decode_dict(d: dict):
+    new_dict = {}
+    for k, v in d.items():
+        new_dict[k] = dynamodb_decode_item(v)
+    return new_dict
+
+
+# == MODEL ==
 
 
 @dataclasses.dataclass
@@ -30,7 +64,7 @@ class PrimaryKeyClassification:
     def __post_init__(self, primary_key):
         semver_re = r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?"
         commit_hash_re = r"[0-9a-f]{7}"
-        simulation_re = fr"(gcc|gchp)-((2x25|2x2\.5|4x5|c24|c48|c90|c180)-)?(1Mon|1Hr)-({semver_re}|{commit_hash_re})(\.bd)?"
+        simulation_re = fr"(gcc|gchp)-((2x25|2x2\.5|4x5|c?24|c?48|c?90|c?180)-)?(1Mon|1Hr)-({semver_re}|{commit_hash_re})(\.bd)?"
         if re.match(fr"^{simulation_re}$", primary_key):
             if re.match(r"^gchp", primary_key):
                 self.classification = "GCHP Simulation"
@@ -70,12 +104,13 @@ class RegistryEntry:
 
     def __post_init__(self, dynamodb_scan_result):
         if dynamodb_scan_result is not None:
-            self.primary_key = dynamodb_get_string("InstanceID", dynamodb_scan_result)
-            self.creation_date = dynamodb_get_string("CreationDate", dynamodb_scan_result)
-            self.execution_status = dynamodb_get_string("ExecStatus", dynamodb_scan_result)
-            self.execution_site = dynamodb_get_string("Site", dynamodb_scan_result)
-            self.s3_uri = dynamodb_get_string("S3Uri", dynamodb_scan_result)
-            self.description = dynamodb_get_string("Description", dynamodb_scan_result)
+            dynamodb_scan_result = dynamodb_decode_dict(dynamodb_scan_result)
+            self.primary_key = dynamodb_scan_result.get("InstanceID")
+            self.creation_date = dynamodb_scan_result.get("CreationDate")
+            self.execution_status = dynamodb_scan_result.get("ExecStatus")
+            self.execution_site = dynamodb_scan_result.get("Site")
+            self.s3_uri = dynamodb_scan_result.get("S3Uri")
+            self.description = dynamodb_scan_result.get("Description")
         self.primary_key_classification = PrimaryKeyClassification(primary_key=self.primary_key)
 
 
@@ -93,14 +128,15 @@ class RegistryEntryStage:
 
     def __post_init__(self, dynamodb_stage_result):
         if dynamodb_stage_result is not None:
-            self.name = dynamodb_get_string("Name", dynamodb_stage_result)
-            self.log_file = dynamodb_get_string("Log", dynamodb_stage_result)
-            self.completed = dynamodb_get_bool("Completed", dynamodb_stage_result)
-            self.start_time = dynamodb_get_string("StartTime", dynamodb_stage_result)
-            self.end_time = dynamodb_get_string("EndTime", dynamodb_stage_result)
-            self.artifacts = dynamodb_get_list_of_strings("Artifacts", dynamodb_stage_result)
-            self.public_artifacts = dynamodb_get_list_of_strings("PublicArtifacts", dynamodb_stage_result)
-            self.metadata = dynamodb_get_string("Metadata", dynamodb_stage_result)
+            dynamodb_stage_result = dynamodb_decode_dict(dynamodb_stage_result)
+            self.name = dynamodb_stage_result.get("Name")
+            self.log_file = dynamodb_stage_result.get("Log")
+            self.completed = dynamodb_stage_result.get("Completed")
+            self.start_time = dynamodb_stage_result.get("StartTime")
+            self.end_time = dynamodb_stage_result.get("EndTime")
+            self.artifacts = dynamodb_stage_result.get("Artifacts")
+            self.public_artifacts = dynamodb_stage_result.get("PublicArtifacts")
+            self.metadata = dynamodb_stage_result.get("Metadata")
 
 
 @dataclasses.dataclass
@@ -138,6 +174,44 @@ class RegistryEntryDiff(RegistryEntry):
             super().__post_init__(dynamodb_scan_result)
 
 
+@dataclasses.dataclass
+class NewDifferencePlot:
+    ref: str
+    dev: str
+    execution_site: str
+
+    def get_put_item(self):
+        primary_key = f"diff-{self.ref}-{self.dev}"
+
+        if "-1Hr-" in self.ref:
+            s3_uri_suffix = "1Hr"
+        elif "-1Day-" in self.ref:
+            s3_uri_suffix = "1Day"
+        elif r"-1Mon-" in self.ref:
+            s3_uri_suffix = "1Mon"
+        else:
+            raise RuntimeError("No period regex matched reference key")
+        if self.execution_site == "AWS":
+            s3_uri = "s3://benchmarks-cloud/diff-plots"
+        elif self.execution_site == "WUSTL":
+            s3_uri = "s3://washu-benchmarks-cloud/diff-plots"
+        else:
+            raise RuntimeError("Invalid site.")
+        s3_uri = f"{s3_uri}/{s3_uri_suffix}/{primary_key}"
+
+        item = {
+            "InstanceID": primary_key,
+            "CreationDate": date.today().isoformat(),
+            "ExecStatus": "PENDING",
+            "S3Uri": s3_uri,
+            "Description": f"Benchmark plots for Ref={self.ref} and Dev={self.dev} ({s3_uri_suffix})",
+            "Site": self.execution_site,
+            "Stages": [],
+        }
+        item = dynamodb_encode_dict(item)
+        return item
+
+
 #== VIEW ==
 
 html_page_begin="""<!DOCTYPE html>
@@ -162,7 +236,7 @@ html_page_end="""</body>
 dashboard_template="""
 <h2>Difference Plots</h2>
 <table>
-    <tr><th>ID</th><th>Date</th><th>Status</th><th>Site</th></tr>
+    <tr><th>ID</th><th>Date</th><th>Status</th><th>Site</th><th>Description</th></tr>
 {%- for entry in entries -%}
     {%- if entry.primary_key_classification.classification == 'Difference Plots' -%}
     <tr>
@@ -174,6 +248,7 @@ dashboard_template="""
         <td>{{ entry.creation_date }}</td>
         <td>{{ entry.execution_status }}</td>
         <td>{{ entry.execution_site }}</td>
+        <td>{{ entry.description }}</td>
     </tr>
     {%- endif -%}
 {%- endfor -%}
@@ -182,7 +257,7 @@ dashboard_template="""
 <hr>
 <h2>GCHP Simulations</h2>
 <table>
-    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th></tr>
+    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th><th>Description</th></tr>
 {%- for entry in entries -%}
     {%- if entry.primary_key_classification.classification == 'GCHP Simulation' -%}
     <tr>
@@ -195,6 +270,7 @@ dashboard_template="""
         <td>{{ entry.execution_status }}</td>
         <td><a href="{{ entry.primary_key_classification.code_url }}">{{ entry.primary_key_classification.commit_id }}</a></td>
         <td>{{ entry.execution_site }}</td>
+        <td>{{ entry.description }}</td>
     </tr>
     {%- endif -%}
 {%- endfor -%}
@@ -203,7 +279,7 @@ dashboard_template="""
 <hr>
 <h2>GC-Classic Simulations</h2>
 <table>
-    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th></tr>
+    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th><th>Description</th></tr>
 {%- for entry in entries -%}
     {%- if entry.primary_key_classification.classification == 'GC-Classic Simulation' -%}
     <tr>
@@ -216,6 +292,7 @@ dashboard_template="""
         <td>{{ entry.execution_status }}</td>
         <td><a href="{{ entry.primary_key_classification.code_url }}">{{ entry.primary_key_classification.commit_id }}</a></td>
         <td>{{ entry.execution_site }}</td>
+        <td>{{ entry.description }}</td>
     </tr>
     {%- endif -%}
 {%- endfor -%}
@@ -460,6 +537,9 @@ def get_dynamodb_client():
                                    aws_session_token=response['Credentials']['SessionToken'])
     return dynamodb_client
 
+def get_wustl_dynamodb_client():
+    return boto3.client('dynamodb')
+
 
 def parse_scan_response(response):
     entries = []
@@ -496,7 +576,10 @@ def query_registry(items, astype):
         RequestItems={TABLE_NAME: {'Keys': request_keys}}
     )
 
-    return parse_query_response_astype(response["Responses"][TABLE_NAME], astype)
+    if astype is dict:
+        return [dynamodb_decode_dict(response) for response in response["Responses"][TABLE_NAME]]
+    else:
+        return parse_query_response_astype(response["Responses"][TABLE_NAME], astype)
 
 
 def dashboard(event, context):
@@ -524,6 +607,7 @@ def simulation(event, context):
         "body": html_page,
     }
 
+
 def difference(event, context):
     primary_key = event['queryStringParameters']['primary_key']
     entries = query_registry(primary_key, RegistryEntryDiff)
@@ -535,3 +619,32 @@ def difference(event, context):
         },
         "body": html_page,
     }
+
+
+# def api(event, context):
+#     http_method = event["httpMethod"]
+#     if "body" not in event:
+#         return dict(statusCode=400, body="No body.")
+#     if http_method not in ["POST", "GET", "DELETE"]:
+#         return dict(statusCode=405, body="Method not allowed.")
+#
+#     body = event["body"]
+#
+#     if body.get("Password") != "2a76ba12e5940b7809f720633253f99c":
+#         return dict(statusCode=401, body="Invalid password.")
+#
+#     if body.get("RequestType") == "New GCHP versus GCHP benchmark plots" and http_method == "POST":
+#         ref = body["RequestParameters"]["Ref"]
+#         dev = body["RequestParameters"]["Dev"]
+#         new_request = NewDifferencePlot(ref, dev, "WUSTL")
+#         dynamodb_client = get_wustl_dynamodb_client()
+#         dynamodb_client.put_item(
+#             TableName=TABLE_NAME,
+#             Item=new_request.get_put_item()
+#         )
+#     elif body.get("RequestType") == "Get entry" and http_method == "GET":
+#         item = body["RequestParameters"]["PrimaryKey"]
+#         results = query_registry(item, dict)
+#         return dict(statusCode=200, body=json.dumps(results))
+#     else:
+#         return dict(statusCode=400, body="Bad request.")

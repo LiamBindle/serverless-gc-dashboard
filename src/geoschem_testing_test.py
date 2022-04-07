@@ -6,6 +6,36 @@ import json
 from .geoschem_testing import *
 
 
+def test_encoding_decoding_dynamodb_dict():
+    test_dict_decoded = {
+        "string1": "foobar",
+        "map1": { "string2": "foo", "bool1": False },
+        "list1": ["string3", "string4"],
+    }
+
+    test_dict_encoded = {
+        "string1": {"S": "foobar"},
+        "map1": {
+            "M": {
+                "string2": {"S": "foo"},
+                "bool1": {"BOOL": False}
+            },
+        },
+        "list1": {
+            "L": [
+                {"S": "string3"},
+                {"S": "string4"}
+            ]
+        }
+    }
+
+    decoding_answer = dynamodb_decode_dict(test_dict_encoded)
+    assert decoding_answer == test_dict_decoded
+
+    encoding_answer = dynamodb_encode_dict(test_dict_decoded)
+    assert encoding_answer == test_dict_encoded
+
+
 def test_primary_key_classification():
     assert PrimaryKeyClassification(primary_key="gchp-1Mon-13.4.0-rc.3.bd").classification == "GCHP Simulation"
     assert PrimaryKeyClassification(primary_key="gchp-1Mon-13.4.0-rc.3").classification == "GCHP Simulation"
@@ -55,6 +85,7 @@ def test_parsing_query():
     )
     assert entries[0] == an_entry_that_should_exist
 
+
 def test_parsing_diff_query():
     with open("test_data/diff_query_result.json") as f:
         response = [json.load(f)['Item']]
@@ -79,3 +110,17 @@ def test_parsing_diff_query():
     )
 
     assert entries[0] == an_entry_that_should_exist
+
+
+def test_diff_plot_get_put_item():
+    new_request = NewDifferencePlot("1234-1Hr-1234", "abcd-1Hr-abcd", "AWS")
+    answer = {
+        "InstanceID": {"S": "diff-1234-1Hr-1234-abcd-1Hr-abcd"},
+        "CreationDate": {"S": date.today().isoformat()},
+        "ExecStatus": {"S": "PENDING"},
+        "S3Uri": {"S": "s3://benchmarks-cloud/diff-plots/1Hr/diff-1234-1Hr-1234-abcd-1Hr-abcd"},
+        "Description": {"S": "Benchmark plots for Ref=1234-1Hr-1234 and Dev=abcd-1Hr-abcd (1Hr)"},
+        "Site": {"S": "AWS"},
+        "Stages": {"L": []}
+    }
+    assert new_request.get_put_item() == answer
