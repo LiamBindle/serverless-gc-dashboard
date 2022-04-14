@@ -64,13 +64,14 @@ class PrimaryKeyClassification:
     def __post_init__(self, primary_key):
         semver_re = r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?"
         commit_hash_re = r"[0-9a-f]{7}"
-        simulation_re = fr"(gcc|gchp)-((2x25|2x2\.5|4x5|c?24|c?48|c?90|c?180)-)?(1Mon|1Hr)-({semver_re}|{commit_hash_re})(\.bd)?"
+        simulation_re = fr"(gcc|gchp)-((2x25|2x2\.5|4x5|c?24|c?48|c?90|c?180)-)?(1Mon-|1Hr-)?({semver_re}|{commit_hash_re})(\.bd)?"
+        diff_of_diffs_re = fr"diff-of-diffs-1Mon-(gcc|gchp)-(2x25|2x2\.5|4x5|c?24|c?48|c?90|c?180)-(gcc|gchp)-(2x25|2x2\.5|4x5|c?24|c?48|c?90|c?180)-({semver_re}|{commit_hash_re})-({semver_re}|{commit_hash_re})"
         if re.match(fr"^{simulation_re}$", primary_key):
             if re.match(r"^gchp", primary_key):
-                self.classification = "GCHP Simulation"
+                self.classification = "GEOS-Chem Simulation"
                 repo = "GCHP"
             else:
-                self.classification = "GC-Classic Simulation"
+                self.classification = "GEOS-Chem Simulation"
                 repo="GCClassic"
             semver_tag = re.search(semver_re, primary_key)
             if semver_tag:
@@ -84,6 +85,9 @@ class PrimaryKeyClassification:
                 self.code_url = f"https://github.com/geoschem/{repo}/commit/{self.commit_id}"
             self.api = "simulation"
         elif re.match(fr"^diff-{simulation_re}-{simulation_re}$", primary_key):
+            self.classification = "Difference Plots"
+            self.api = "difference"
+        elif re.match(diff_of_diffs_re, primary_key):
             self.classification = "Difference Plots"
             self.api = "difference"
         else:
@@ -234,6 +238,28 @@ html_page_end="""</body>
 """
 
 dashboard_template="""
+<h2>Registered Simulations</h2>
+<table>
+    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th><th>Description</th></tr>
+{%- for entry in entries -%}
+    {%- if entry.primary_key_classification.classification == 'GEOS-Chem Simulation' -%}
+    <tr>
+        {%- if entry.primary_key_classification.api is not none -%}
+        <td><a href="{{ entry.primary_key_classification.api }}?primary_key={{ entry.primary_key }}">{{ entry.primary_key }}</a></td>
+        {%- else -%}
+        <td>{{ entry.primary_key }}</td>
+        {%- endif -%}
+        <td>{{ entry.creation_date }}</td>
+        <td>{{ entry.execution_status }}</td>
+        <td><a href="{{ entry.primary_key_classification.code_url }}">{{ entry.primary_key_classification.commit_id }}</a></td>
+        <td>{{ entry.execution_site }}</td>
+        <td>{{ entry.description }}</td>
+    </tr>
+    {%- endif -%}
+{%- endfor -%}
+</table>
+
+<hr>
 <h2>Difference Plots</h2>
 <table>
     <tr><th>ID</th><th>Date</th><th>Status</th><th>Site</th><th>Description</th></tr>
@@ -255,42 +281,15 @@ dashboard_template="""
 </table>
 
 <hr>
-<h2>GCHP Simulations</h2>
+<h2>Unclassified Entries</h2>
 <table>
-    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th><th>Description</th></tr>
+    <tr><th>ID</th><th>Date</th><th>Status</th><th>Site</th><th>Description</th></tr>
 {%- for entry in entries -%}
-    {%- if entry.primary_key_classification.classification == 'GCHP Simulation' -%}
+    {%- if entry.primary_key_classification.classification == 'Unknown' -%}
     <tr>
-        {%- if entry.primary_key_classification.api is not none -%}
-        <td><a href="{{ entry.primary_key_classification.api }}?primary_key={{ entry.primary_key }}">{{ entry.primary_key }}</a></td>
-        {%- else -%}
         <td>{{ entry.primary_key }}</td>
-        {%- endif -%}
         <td>{{ entry.creation_date }}</td>
         <td>{{ entry.execution_status }}</td>
-        <td><a href="{{ entry.primary_key_classification.code_url }}">{{ entry.primary_key_classification.commit_id }}</a></td>
-        <td>{{ entry.execution_site }}</td>
-        <td>{{ entry.description }}</td>
-    </tr>
-    {%- endif -%}
-{%- endfor -%}
-</table>
-
-<hr>
-<h2>GC-Classic Simulations</h2>
-<table>
-    <tr><th>Simulation ID</th><th>Date</th><th>Status</th><th>Code Url</th><th>Site</th><th>Description</th></tr>
-{%- for entry in entries -%}
-    {%- if entry.primary_key_classification.classification == 'GC-Classic Simulation' -%}
-    <tr>
-        {%- if entry.primary_key_classification.api is not none -%}
-        <td><a href="{{ entry.primary_key_classification.api }}?primary_key={{ entry.primary_key }}">{{ entry.primary_key }}</a></td>
-        {%- else -%}
-        <td>{{ entry.primary_key }}</td>
-        {%- endif -%}
-        <td>{{ entry.creation_date }}</td>
-        <td>{{ entry.execution_status }}</td>
-        <td><a href="{{ entry.primary_key_classification.code_url }}">{{ entry.primary_key_classification.commit_id }}</a></td>
         <td>{{ entry.execution_site }}</td>
         <td>{{ entry.description }}</td>
     </tr>
@@ -552,7 +551,6 @@ def scan_registry():
     client = get_dynamodb_client()
     response = client.scan(
         TableName=TABLE_NAME,
-        Limit=50,
         ProjectionExpression='InstanceID,CreationDate,ExecStatus,Site,Description',
     )
     return parse_scan_response(response['Items'])
@@ -620,31 +618,3 @@ def difference(event, context):
         "body": html_page,
     }
 
-
-# def api(event, context):
-#     http_method = event["httpMethod"]
-#     if "body" not in event:
-#         return dict(statusCode=400, body="No body.")
-#     if http_method not in ["POST", "GET", "DELETE"]:
-#         return dict(statusCode=405, body="Method not allowed.")
-#
-#     body = event["body"]
-#
-#     if body.get("Password") != "2a76ba12e5940b7809f720633253f99c":
-#         return dict(statusCode=401, body="Invalid password.")
-#
-#     if body.get("RequestType") == "New GCHP versus GCHP benchmark plots" and http_method == "POST":
-#         ref = body["RequestParameters"]["Ref"]
-#         dev = body["RequestParameters"]["Dev"]
-#         new_request = NewDifferencePlot(ref, dev, "WUSTL")
-#         dynamodb_client = get_wustl_dynamodb_client()
-#         dynamodb_client.put_item(
-#             TableName=TABLE_NAME,
-#             Item=new_request.get_put_item()
-#         )
-#     elif body.get("RequestType") == "Get entry" and http_method == "GET":
-#         item = body["RequestParameters"]["PrimaryKey"]
-#         results = query_registry(item, dict)
-#         return dict(statusCode=200, body=json.dumps(results))
-#     else:
-#         return dict(statusCode=400, body="Bad request.")
